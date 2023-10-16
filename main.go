@@ -1,41 +1,49 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
+
+type apiConfig struct {
+	fileserverHits int
+}
 
 func main() {
 	const filepathRoot = "."
 	const port = "8080"
+	var apiConfig apiConfig
 
-	mux := http.NewServeMux()
-	mux.Handle("/app/", http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot))))
-	mux.HandleFunc("/healthz", handleServerHealth)
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
 
-	corsMux := middlewareCors(mux)
+	fsHandler := apiConfig.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot))))
+	r.Handle("/app", fsHandler)
+	r.Handle("/app/*", fsHandler)
 
-	err := http.ListenAndServe(":"+port, corsMux)
-	if err != nil {
-		fmt.Println(err)
+	// Create a subrouter for /api
+	apiRouter := chi.NewRouter()
+	apiRouter.Get("/reset", apiConfig.handleReset)
+	apiRouter.Get("/healthz", handleServerHealth)
+	apiRouter.Post("/validate_chirp", handleValidateChirp)
+
+	r.Mount("/api", apiRouter)
+
+	// Create a subrouter for /admin
+	adminRouter := chi.NewRouter()
+	adminRouter.Get("/metrics", apiConfig.handleMetrics)
+	r.Mount("/admin", adminRouter)
+
+	corsMux := middlewareCors(r)
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: corsMux,
 	}
-}
 
-func handleServerHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func middlewareCors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	log.Printf("Server running on port: %s", port)
+	log.Fatal(srv.ListenAndServe())
 }
