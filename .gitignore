@@ -21,3 +21,5 @@
 go.work
 chirpy
 out
+.env
+database.json
